@@ -1,14 +1,13 @@
 const express = require('express');
-const pairRouter = require('./pair');
-
 const app = express();
+const pairRouter = require('./pair'); // make sure pair.js is in the same folder
+
 const PORT = process.env.PORT || 3000;
 
-// Pairing route
-app.use('/pair', pairRouter);
+// Mount the pair router at root
+app.use('/', pairRouter);
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Open http://localhost:${PORT} to scan QR`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
