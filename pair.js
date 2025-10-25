@@ -1,5 +1,5 @@
 const express = require('express');
-const fs = require('fs-extra');
+const fs = require('fs');
 const pino = require('pino');
 const {
     default: makeWASocket,
@@ -10,7 +10,7 @@ const {
 
 const router = express.Router();
 
-// Socket state
+// Socket state to handle QR streaming
 let sockInstance = {
     sock: null,
     currentQR: null,
@@ -24,7 +24,12 @@ let sockInstance = {
     }
 };
 
-// Serve the HTML directly
+// Remove a folder/file safely
+function removeFile(filePath) {
+    if (fs.existsSync(filePath)) fs.rmSync(filePath, { recursive: true, force: true });
+}
+
+// Serve QR HTML directly
 router.get('/', (req, res) => {
     res.send(`
 <!DOCTYPE html>
@@ -73,7 +78,7 @@ evtSource.onerror = function(){
     `);
 });
 
-// SSE endpoint for QR
+// SSE endpoint for QR updates
 router.get('/qr-stream', (req, res) => {
     res.set({
         'Content-Type': 'text/event-stream',
@@ -90,13 +95,14 @@ router.get('/qr-stream', (req, res) => {
     sockInstance.addQRListener(sendQR);
 
     const keepAlive = setInterval(() => res.write(':\n\n'), 20000);
+
     req.on('close', () => {
         clearInterval(keepAlive);
         sockInstance.removeQRListener(sendQR);
     });
 });
 
-// Trigger pairing logic
+// Trigger pairing process
 router.get('/start', (req, res) => {
     res.send({ status: 'Pairing started. Open / to scan QR.' });
 
@@ -139,9 +145,7 @@ router.get('/start', (req, res) => {
                     });
 
                     sockInstance.currentQR = null;
-                }
-
-                else if (connection === 'close') {
+                } else if (connection === 'close') {
                     const reason = lastDisconnect?.error?.output?.payload?.message || 'Unknown';
                     console.log(`⚠ Connection closed: ${reason}`);
                     if (!reason.includes('not-authorized')) {
@@ -159,6 +163,12 @@ router.get('/start', (req, res) => {
             sockInstance.isPairing = false;
         }
     })();
+});
+
+process.on('uncaughtException', function (err) {
+    let e = String(err);
+    if (["conflict", "Socket connection timeout", "not-authorized", "rate-overlimit", "Connection Closed", "Timed Out", "Value not found"].some(v => e.includes(v))) return;
+    console.log('Caught exception:', err);
 });
 
 module.exports = router;
