@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp QR Pairing</title>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background: #f3f4f6;
+    }
+    h1 {
+        color: #333;
+    }
+    #qr-container {
+        margin-top: 20px;
+        padding: 10px;
+        background: #fff;
+        border: 1px solid #ccc;
+    }
+    #status {
+        margin-top: 15px;
+        font-weight: bold;
+        color: #555;
+    }
+</style>
+</head>
+<body>
+<h1>Scan QR with WhatsApp</h1>
+<div id="qr-container">
+    <canvas id="qr"></canvas>
+</div>
+<div id="status">Waiting for QR...</div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+<script>
+const qrCanvas = document.getElementById('qr');
+const statusDiv = document.getElementById('status');
+
+async function fetchQR() {
+    try {
+        const res = await fetch('/pair');
+        const data = await res.json();
+
+        if (data.qr) {
+            QRCode.toCanvas(qrCanvas, data.qr, { width: 300 }, function (error) {
+                if (error) console.error(error);
+            });
+            statusDiv.textContent = "📱 Scan the QR with WhatsApp";
+        } else {
+            statusDiv.textContent = "✅ Session ready!";
+        }
+    } catch (err) {
+        console.error(err);
+        statusDiv.textContent = "❌ Unable to fetch QR. Retrying...";
+    }
+}
+
+// Initial fetch
+fetchQR();
+
+// Refresh QR every 30 seconds in case it expires
+setInterval(fetchQR, 30000);
+</script>
+</body>
+</html>
