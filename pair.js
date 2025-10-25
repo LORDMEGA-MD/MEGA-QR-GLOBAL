@@ -1,5 +1,5 @@
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs-extra');
 const pino = require('pino');
 const {
     default: makeWASocket,
@@ -10,12 +10,7 @@ const {
 
 const router = express.Router();
 
-// Helper to remove session folder
-function removeFile(filePath) {
-    if (fs.existsSync(filePath)) fs.rmSync(filePath, { recursive: true, force: true });
-}
-
-// Global socket instance and state
+// Socket state
 let sockInstance = {
     sock: null,
     currentQR: null,
@@ -29,7 +24,56 @@ let sockInstance = {
     }
 };
 
-// SSE endpoint to stream QR codes
+// Serve the HTML directly
+router.get('/', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp Pairing</title>
+<style>
+body { font-family: Arial; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; background:#f0f2f5; }
+h1 { color:#333; }
+#qr-container { background:white; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); text-align:center; }
+img { width:300px; height:300px; display:none; margin-top:10px; }
+#status { margin-top:10px; font-weight:bold; color:#555; }
+</style>
+</head>
+<body>
+<h1>WhatsApp Pairing</h1>
+<div id="qr-container">
+    <div id="status">Waiting for QR...</div>
+    <img id="qr-image" src="" alt="QR Code">
+</div>
+<script>
+const statusEl = document.getElementById('status');
+const qrImg = document.getElementById('qr-image');
+
+const evtSource = new EventSource('/pair/qr-stream');
+
+evtSource.onmessage = function(event){
+    try {
+        const data = JSON.parse(event.data);
+        if(data.qr){
+            qrImg.src = 'https://api.qrserver.com/v1/create-qr-code/?data=' + encodeURIComponent(data.qr) + '&size=300x300';
+            qrImg.style.display = 'block';
+            statusEl.textContent = 'Scan this QR with WhatsApp';
+        }
+    } catch(e){ console.error(e); }
+};
+
+evtSource.onerror = function(){
+    statusEl.textContent = 'Connection lost. Retrying...';
+};
+</script>
+</body>
+</html>
+    `);
+});
+
+// SSE endpoint for QR
 router.get('/qr-stream', (req, res) => {
     res.set({
         'Content-Type': 'text/event-stream',
@@ -38,34 +82,28 @@ router.get('/qr-stream', (req, res) => {
     });
     res.flushHeaders();
 
-    // Send current QR if available
     if (sockInstance.currentQR) {
         res.write(`data: ${JSON.stringify({ qr: sockInstance.currentQR })}\n\n`);
     }
 
-    // Listener to send QR updates
     const sendQR = (qr) => res.write(`data: ${JSON.stringify({ qr })}\n\n`);
     sockInstance.addQRListener(sendQR);
 
-    // Keep connection alive
     const keepAlive = setInterval(() => res.write(':\n\n'), 20000);
-
     req.on('close', () => {
         clearInterval(keepAlive);
         sockInstance.removeQRListener(sendQR);
     });
 });
 
-// Main pairing endpoint
-router.get('/', (req, res) => {
-    // Respond immediately
-    res.send({ status: 'Pairing started. Open /qr-stream to scan QR.' });
+// Trigger pairing logic
+router.get('/start', (req, res) => {
+    res.send({ status: 'Pairing started. Open / to scan QR.' });
 
-    // Start pairing in background
-    async function Mega_MdPair() {
-        if (sockInstance.isPairing) return; // Prevent multiple parallel pairings
-        sockInstance.isPairing = true;
+    if (sockInstance.isPairing) return;
+    sockInstance.isPairing = true;
 
+    (async function Mega_MdPair() {
         try {
             const { state, saveCreds } = await useMultiFileAuthState('./session');
 
@@ -75,8 +113,8 @@ router.get('/', (req, res) => {
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }).child({ level: 'fatal' })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: 'fatal' }).child({ level: 'fatal' }),
-                browser: ["Ubuntu", "Chrome", "20.0.04"]
+                logger: pino({ level: 'fatal' }),
+                browser: ['Ubuntu', 'Chrome', '20.0.0']
             });
 
             sockInstance.sock = sock;
@@ -87,67 +125,40 @@ router.get('/', (req, res) => {
                 if (connection === 'open') {
                     console.log('✅ WhatsApp connected');
 
-                    // Send creds.json to the user who scanned
-                    const sessionMegaMD = fs.readFileSync('./session/creds.json');
+                    const credsPath = './session/creds.json';
+                    const sessionData = fs.readFileSync(credsPath);
+
                     await sock.sendMessage(sock.user.id, {
-                        document: sessionMegaMD,
+                        document: sessionData,
                         mimetype: 'application/json',
                         fileName: 'creds.json'
                     });
 
                     await sock.sendMessage(sock.user.id, {
-                        text: '> *Session obtained successfully!* Upload the creds.json to your session folder.',
-                        contextInfo: {
-                            externalAdReply: {
-                                title: "Successfully Generated Session",
-                                body: "Mega-MD Session Generator 1",
-                                thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
-                                sourceUrl: "https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w",
-                                mediaType: 1,
-                                renderLargerThumbnail: true,
-                                showAdAttribution: true
-                            }
-                        }
+                        text: '> Session obtained successfully! Upload creds.json to your session folder.',
                     });
 
-                    console.log('🎯 Pairing complete, session ready.');
-                    sockInstance.currentQR = null; // Clear QR after successful pairing
-                } 
+                    sockInstance.currentQR = null;
+                }
 
                 else if (connection === 'close') {
                     const reason = lastDisconnect?.error?.output?.payload?.message || 'Unknown';
                     console.log(`⚠ Connection closed: ${reason}`);
-
-                    if (reason.includes('401') || reason.includes('not-authorized')) {
-                        console.log('❌ Unauthorized. Remove invalid creds.json before retry.');
-                        sockInstance.isPairing = false;
-                        return;
+                    if (!reason.includes('not-authorized')) {
+                        await delay(10000);
+                        Mega_MdPair();
                     }
-
-                    // Retry after delay
-                    await delay(10000);
-                    console.log('🔄 Retrying pairing...');
-                    Mega_MdPair(); 
                 }
             });
 
             sock.ev.on('creds.update', saveCreds);
 
         } catch (err) {
-            console.log('❌ Service error:', err);
+            console.log('❌ Pairing failed:', err);
         } finally {
             sockInstance.isPairing = false;
         }
-    }
-
-    Mega_MdPair();
-});
-
-// Handle uncaught exceptions safely
-process.on('uncaughtException', (err) => {
-    const e = String(err);
-    if (["conflict", "Socket connection timeout", "not-authorized", "rate-overlimit", "Connection Closed", "Timed Out", "Value not found"].some(v => e.includes(v))) return;
-    console.log('Caught exception:', err);
+    })();
 });
 
 module.exports = router;
