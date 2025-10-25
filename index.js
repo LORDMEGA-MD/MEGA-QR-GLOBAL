@@ -1,19 +1,22 @@
-const express = require("express");
-const path = require("path");
-const cors = require("cors");
+const express = require('express');
+const path = require('path');
+const pairRouter = require('./pair');
+
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-const pairRouter = require("./pair.js");
+// Serve static files (CSS, JS, HTML)
+app.use(express.static(path.join(__dirname, '/')));
 
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+// Pairing API route
+app.use('/pair', pairRouter);
 
-app.use("/api", pairRouter);
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "pair.html"));
+// Serve the pairing HTML page
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'pair.html'));
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ MEGA-MD2 running on port ${PORT}`));
+// Start server
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
