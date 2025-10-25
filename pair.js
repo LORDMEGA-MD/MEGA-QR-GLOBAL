@@ -10,15 +10,28 @@ const {
 
 const router = express.Router();
 
+// Helper to remove session folder
 function removeFile(filePath) {
     if (fs.existsSync(filePath)) fs.rmSync(filePath, { recursive: true, force: true });
 }
 
-// Store current socket instance globally to avoid multiple instances
+// Global socket instance for SSE
 let sockInstance = null;
 
-// SSE endpoint to push QR codes
-router.get('/qr-stream', async (req, res) => {
+// Store current QR and SSE listeners
+sockInstance = {
+    currentQR: null,
+    qrListeners: [],
+    addQRListener(fn) { this.qrListeners.push(fn); },
+    removeQRListener(fn) { this.qrListeners = this.qrListeners.filter(f => f !== fn); },
+    pushQR(qr) {
+        this.currentQR = qr;
+        this.qrListeners.forEach(f => f(qr));
+    }
+};
+
+// SSE endpoint for QR codes
+router.get('/qr-stream', (req, res) => {
     res.set({
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -26,29 +39,26 @@ router.get('/qr-stream', async (req, res) => {
     });
     res.flushHeaders();
 
-    const sendQR = (qr) => {
-        res.write(`data: ${JSON.stringify({ qr })}\n\n`);
-    };
-
-    // If socket exists and already has QR
-    if (sockInstance && sockInstance.currentQR) {
-        sendQR(sockInstance.currentQR);
+    // Push current QR if already exists
+    if (sockInstance.currentQR) {
+        res.write(`data: ${JSON.stringify({ qr: sockInstance.currentQR })}\n\n`);
     }
 
-    // Save a function to push QR to this SSE client
-    sockInstance?.addQRListener(sendQR);
+    // Function to push QR updates to this client
+    const sendQR = (qr) => res.write(`data: ${JSON.stringify({ qr })}\n\n`);
+    sockInstance.addQRListener(sendQR);
 
     // Keep connection alive
-    const interval = setInterval(() => res.write(':\n\n'), 20000);
+    const keepAlive = setInterval(() => res.write(':\n\n'), 20000);
 
-    // Clean up on client disconnect
+    // Cleanup on disconnect
     req.on('close', () => {
-        clearInterval(interval);
-        sockInstance?.removeQRListener(sendQR);
+        clearInterval(keepAlive);
+        sockInstance.removeQRListener(sendQR);
     });
 });
 
-// Main pairing route
+// Main pairing endpoint
 router.get('/', async (req, res) => {
     async function Mega_MdPair() {
         try {
@@ -65,21 +75,12 @@ router.get('/', async (req, res) => {
             });
 
             // Attach socket globally for SSE
-            sockInstance = sock;
-            sockInstance.currentQR = null;
-            sockInstance.qrListeners = [];
-
-            sockInstance.addQRListener = (fn) => sockInstance.qrListeners.push(fn);
-            sockInstance.removeQRListener = (fn) => sockInstance.qrListeners = sockInstance.qrListeners.filter(f => f !== fn);
-            const pushQR = (qr) => {
-                sockInstance.currentQR = qr;
-                sockInstance.qrListeners.forEach(f => f(qr));
-            };
+            sockInstance.sock = sock;
 
             sock.ev.on('connection.update', async (update) => {
                 const { connection, qr, lastDisconnect } = update;
 
-                if (qr) pushQR(qr); // send QR to all SSE clients
+                if (qr) sockInstance.pushQR(qr); // Push QR to all SSE clients
 
                 if (connection === 'open') {
                     console.log('✅ WhatsApp connected');
@@ -93,7 +94,6 @@ router.get('/', async (req, res) => {
                         fileName: 'creds.json'
                     });
 
-                    // Custom message with context info
                     await sock.sendMessage(sock.user.id, {
                         text: `> *ᴍᴇɢᴀ-ᴍᴅ sᴇssɪᴏɴ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*\n📁 Upload the creds.json file to your session folder.\n\n_*Stay tuned for updates!*_`,
                         contextInfo: {
@@ -109,7 +109,6 @@ router.get('/', async (req, res) => {
                         }
                     });
 
-                    // Clean up session folder after sending
                     await delay(100);
                     removeFile('./session');
 
