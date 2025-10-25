@@ -10,7 +10,7 @@ const {
 
 const router = express.Router();
 
-// Socket state to handle QR streaming
+// In-memory QR store
 let sockInstance = {
     sock: null,
     currentQR: null,
@@ -29,7 +29,7 @@ function removeFile(filePath) {
     if (fs.existsSync(filePath)) fs.rmSync(filePath, { recursive: true, force: true });
 }
 
-// Serve QR HTML directly
+// Serve the QR HTML page
 router.get('/', (req, res) => {
     res.send(`
 <!DOCTYPE html>
@@ -56,8 +56,7 @@ img { width:300px; height:300px; display:none; margin-top:10px; }
 const statusEl = document.getElementById('status');
 const qrImg = document.getElementById('qr-image');
 
-const evtSource = new EventSource('/pair/qr-stream');
-
+const evtSource = new EventSource('/qr-stream');
 evtSource.onmessage = function(event){
     try {
         const data = JSON.parse(event.data);
@@ -76,9 +75,12 @@ evtSource.onerror = function(){
 </body>
 </html>
     `);
+
+    // Start pairing automatically
+    if (!sockInstance.isPairing) startPairing();
 });
 
-// SSE endpoint for QR updates
+// SSE for live QR
 router.get('/qr-stream', (req, res) => {
     res.set({
         'Content-Type': 'text/event-stream',
@@ -102,69 +104,66 @@ router.get('/qr-stream', (req, res) => {
     });
 });
 
-// Trigger pairing process
-router.get('/start', (req, res) => {
-    res.send({ status: 'Pairing started. Open / to scan QR.' });
-
+// Core pairing function
+async function startPairing() {
     if (sockInstance.isPairing) return;
     sockInstance.isPairing = true;
 
-    (async function Mega_MdPair() {
-        try {
-            const { state, saveCreds } = await useMultiFileAuthState('./session');
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
 
-            const sock = makeWASocket({
-                auth: {
-                    creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }).child({ level: 'fatal' })),
-                },
-                printQRInTerminal: false,
-                logger: pino({ level: 'fatal' }),
-                browser: ['Ubuntu', 'Chrome', '20.0.0']
-            });
+        const sock = makeWASocket({
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }).child({ level: 'fatal' })),
+            },
+            printQRInTerminal: false,
+            logger: pino({ level: 'fatal' }),
+            browser: ['Ubuntu', 'Chrome', '20.0.0']
+        });
 
-            sockInstance.sock = sock;
+        sockInstance.sock = sock;
 
-            sock.ev.on('connection.update', async ({ connection, qr, lastDisconnect }) => {
-                if (qr) sockInstance.pushQR(qr);
+        sock.ev.on('connection.update', async ({ connection, qr, lastDisconnect }) => {
+            if (qr) sockInstance.pushQR(qr);
 
-                if (connection === 'open') {
-                    console.log('✅ WhatsApp connected');
+            if (connection === 'open') {
+                console.log('✅ WhatsApp connected');
 
-                    const credsPath = './session/creds.json';
-                    const sessionData = fs.readFileSync(credsPath);
+                const credsPath = './session/creds.json';
+                const sessionData = fs.readFileSync(credsPath);
 
-                    await sock.sendMessage(sock.user.id, {
-                        document: sessionData,
-                        mimetype: 'application/json',
-                        fileName: 'creds.json'
-                    });
+                await sock.sendMessage(sock.user.id, {
+                    document: sessionData,
+                    mimetype: 'application/json',
+                    fileName: 'creds.json'
+                });
 
-                    await sock.sendMessage(sock.user.id, {
-                        text: '> Session obtained successfully! Upload creds.json to your session folder.',
-                    });
+                await sock.sendMessage(sock.user.id, {
+                    text: '> Session obtained successfully! Upload creds.json to your session folder.',
+                });
 
-                    sockInstance.currentQR = null;
-                } else if (connection === 'close') {
-                    const reason = lastDisconnect?.error?.output?.payload?.message || 'Unknown';
-                    console.log(`⚠ Connection closed: ${reason}`);
-                    if (!reason.includes('not-authorized')) {
-                        await delay(10000);
-                        Mega_MdPair();
-                    }
+                sockInstance.currentQR = null;
+            } else if (connection === 'close') {
+                const reason = lastDisconnect?.error?.output?.payload?.message || 'Unknown';
+                console.log(`⚠ Connection closed: ${reason}`);
+                if (!reason.includes('not-authorized')) {
+                    await delay(10000);
+                    startPairing();
                 }
-            });
+            }
+        });
 
-            sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-        } catch (err) {
-            console.log('❌ Pairing failed:', err);
-        } finally {
-            sockInstance.isPairing = false;
-        }
-    })();
-});
+    } catch (err) {
+        console.log('❌ Pairing failed:', err);
+    } finally {
+        sockInstance.isPairing = false;
+    }
+}
 
+// Catch uncaught exceptions
 process.on('uncaughtException', function (err) {
     let e = String(err);
     if (["conflict", "Socket connection timeout", "not-authorized", "rate-overlimit", "Connection Closed", "Timed Out", "Value not found"].some(v => e.includes(v))) return;
