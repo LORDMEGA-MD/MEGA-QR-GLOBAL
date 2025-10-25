@@ -1,21 +1,21 @@
 {
-  "name": "mega-md2",
+  "name": "whatsapp-pair",
   "version": "1.0.0",
-  "description": "Mega-MD2 WhatsApp Pairing System",
+  "description": "WhatsApp QR pairing with Baileys",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.7",
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "pino": "^9.0.0",
-    "qrcode": "^1.5.4",
-    "path": "^0.12.7",
-    "fs-extra": "^11.2.0"
+    "@whiskeysockets/baileys": "^5.0.0",
+    "express": "^4.18.2",
+    "pino": "^8.14.0",
+    "qrcode": "^1.5.1"
   },
-  "engines": {
-    "node": ">=18.x"
-  }
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "author": "Mega watt",
+  "license": "MIT"
 }
