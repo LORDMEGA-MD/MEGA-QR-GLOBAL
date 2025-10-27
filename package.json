@@ -1,27 +1,16 @@
 {
-  "name": "wa-pair-demo",
+  "name": "baileys-qr-web",
   "version": "1.0.0",
-  "description": "WhatsApp pairing demo using Baileys with QR streaming",
+  "type": "module",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": [
-    "whatsapp",
-    "baileys",
-    "pairing",
-    "qr",
-    "express"
-  ],
-  "author": "Your Name",
-  "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.19",
+    "@whiskeysockets/baileys": "^6.8.0",
     "express": "^4.18.2",
-    "pino": "^8.14.1"
-  },
-  "engines": {
-    "node": ">=18"
+    "socket.io": "^4.7.1",
+    "pino": "^8.17.0",
+    "qrcode-terminal": "^0.12.0"
   }
 }
