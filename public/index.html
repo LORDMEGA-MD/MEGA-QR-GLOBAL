@@ -3,9 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WhatsApp QR Login</title>
+  <title>WhatsApp QR Pairing</title>
+
   <script src="/socket.io/socket.io.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+
   <style>
     body {
       background: #0a0a0a;
@@ -18,6 +20,7 @@
       height: 100vh;
       margin: 0;
     }
+
     h1 { font-size: 1.8rem; margin-bottom: 20px; }
     #qrCanvas {
       margin-top: 10px;
@@ -35,38 +38,37 @@
 
   <script>
     const socket = io();
-    const qrCanvas = document.getElementById("qrCanvas");
-    const statusEl = document.getElementById("status");
-    const ctx = qrCanvas.getContext("2d");
+    const qrCanvas = document.getElementById('qrCanvas');
+    const statusEl = document.getElementById('status');
+    const ctx = qrCanvas.getContext('2d');
 
-    socket.on("connect", () => console.log("Connected to server"));
+    socket.on('connect', () => console.log('✅ Socket connected'));
 
-    socket.on("qr", (qr) => {
+    socket.on('qr', (qr) => {
       if (!qr) {
         ctx.clearRect(0, 0, qrCanvas.width, qrCanvas.height);
-        statusEl.textContent = "✅ Connected to WhatsApp";
+        statusEl.textContent = "✅ Connected";
         return;
       }
       QRCode.toCanvas(qrCanvas, qr, { width: 256 }, (err) => {
         if (err) {
-          console.error("QR error:", err);
-          statusEl.textContent = "⚠️ Failed to draw QR.";
+          console.error("QR render error:", err);
+          statusEl.textContent = "⚠️ Failed to render QR";
         } else {
-          statusEl.textContent = "Scan this QR with WhatsApp → Linked Devices";
+          statusEl.textContent = "📱 Scan this QR with WhatsApp";
         }
       });
     });
 
-    socket.on("status", (status) => {
-      console.log("Status:", status);
-      if (status === "open") statusEl.textContent = "✅ Connected to WhatsApp";
-      if (status === "close") statusEl.textContent = "❌ Disconnected — retrying...";
-      if (status === "qr") statusEl.textContent = "📱 Scan the QR above";
+    socket.on('status', (s) => {
+      if (s === 'open') statusEl.textContent = "✅ Connected to WhatsApp";
+      if (s === 'close') statusEl.textContent = "❌ Disconnected — retrying...";
+      if (s === 'qr') statusEl.textContent = "📱 Scan the QR above";
     });
 
-    socket.on("connect_error", (err) => {
+    socket.on('connect_error', (err) => {
       console.error("Socket error:", err);
-      statusEl.textContent = "⚠️ Connection error — check console";
+      statusEl.textContent = "⚠️ Connection error";
     });
   </script>
 </body>
