@@ -3,60 +3,111 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WhatsApp QR Pairing</title>
+  <title>MEGA GLOBAL SESSION BY QR</title>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
 
   <style>
     body {
-      background: #0a0a0a;
-      color: #fff;
-      font-family: Arial, sans-serif;
+      margin: 0;
+      overflow: hidden;
+      background: url('https://files.catbox.moe/c29z2z.jpg') no-repeat center center fixed;
+      background-size: cover;
+      color: #00ff99;
+      font-family: 'Courier New', monospace;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
-      margin: 0;
+      position: relative;
     }
 
-    h1 { font-size: 1.8rem; margin-bottom: 20px; }
-    #qrCanvas {
-      margin-top: 10px;
-      background: rgba(255,255,255,0.05);
-      padding: 20px;
-      border-radius: 16px;
+    /* Dark overlay for readability */
+    body::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      z-index: 0;
+      backdrop-filter: blur(5px);
     }
-    #status { margin-top: 15px; font-size: 1.1rem; }
+
+    h1 {
+      z-index: 2;
+      font-size: 2.2rem;
+      color: #00ffe0;
+      text-shadow: 0 0 10px #00ffe0, 0 0 20px #0ff, 0 0 40px #00f6ff;
+      animation: flicker 2s infinite alternate;
+    }
+
+    @keyframes flicker {
+      from { opacity: 0.8; text-shadow: 0 0 10px #00ffe0; }
+      to { opacity: 1; text-shadow: 0 0 20px #ff0055, 0 0 30px #00ffe0; }
+    }
+
+    #qrContainer {
+      position: relative;
+      z-index: 2;
+      border-radius: 16px;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.4);
+      margin-top: 20px;
+      animation: borderGlow 4s linear infinite;
+    }
+
+    @keyframes borderGlow {
+      0% { box-shadow: 0 0 15px #00ff99; }
+      25% { box-shadow: 0 0 25px #00b3ff; }
+      50% { box-shadow: 0 0 25px #ff0077; }
+      75% { box-shadow: 0 0 25px #ffea00; }
+      100% { box-shadow: 0 0 15px #00ff99; }
+    }
+
+    #status {
+      z-index: 2;
+      margin-top: 10px;
+      color: #0f0;
+      text-shadow: 0 0 10px #0f0;
+    }
+
+    #matrixCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
-  <h1>📱 Scan to Connect WhatsApp</h1>
-  <canvas id="qrCanvas" width="256" height="256"></canvas>
+  <canvas id="matrixCanvas"></canvas>
+  <h1>MEGA GLOBAL SESSION BY QR</h1>
+
+  <div id="qrContainer">
+    <canvas id="qrCanvas" width="256" height="256"></canvas>
+  </div>
+
   <p id="status">Waiting for QR...</p>
 
   <script>
+    // ---- Socket.io + QR ----
     const socket = io();
     const qrCanvas = document.getElementById('qrCanvas');
     const statusEl = document.getElementById('status');
     const ctx = qrCanvas.getContext('2d');
 
-    socket.on('connect', () => console.log('✅ Socket connected'));
-
     socket.on('qr', (qr) => {
       if (!qr) {
         ctx.clearRect(0, 0, qrCanvas.width, qrCanvas.height);
-        statusEl.textContent = "✅ Connected";
+        statusEl.textContent = "✅ Connected to WhatsApp";
         return;
       }
-      QRCode.toCanvas(qrCanvas, qr, { width: 256 }, (err) => {
-        if (err) {
-          console.error("QR render error:", err);
-          statusEl.textContent = "⚠️ Failed to render QR";
-        } else {
-          statusEl.textContent = "📱 Scan this QR with WhatsApp";
-        }
+      QRCode.toCanvas(qrCanvas, qr, { width: 256, color: { dark: "#00ff99", light: "#00000000" } }, (err) => {
+        statusEl.textContent = err ? "⚠️ Failed to render QR" : "📱 Scan this QR with WhatsApp";
       });
     });
 
@@ -66,9 +117,36 @@
       if (s === 'qr') statusEl.textContent = "📱 Scan the QR above";
     });
 
-    socket.on('connect_error', (err) => {
-      console.error("Socket error:", err);
-      statusEl.textContent = "⚠️ Connection error";
+    // ---- Matrix Rain ----
+    const matrixCanvas = document.getElementById("matrixCanvas");
+    const matrixCtx = matrixCanvas.getContext("2d");
+
+    matrixCanvas.width = window.innerWidth;
+    matrixCanvas.height = window.innerHeight;
+
+    const letters = "01 LordMega ";
+    const fontSize = 16;
+    const columns = matrixCanvas.width / fontSize;
+    const drops = Array(Math.floor(columns)).fill(1);
+
+    function drawMatrix() {
+      matrixCtx.fillStyle = "rgba(0, 0, 0, 0.1)";
+      matrixCtx.fillRect(0, 0, matrixCanvas.width, matrixCanvas.height);
+      matrixCtx.fillStyle = "#0F0";
+      matrixCtx.font = `${fontSize}px monospace`;
+
+      for (let i = 0; i < drops.length; i++) {
+        const text = letters.charAt(Math.floor(Math.random() * letters.length));
+        matrixCtx.fillText(text, i * fontSize, drops[i] * fontSize);
+        if (drops[i] * fontSize > matrixCanvas.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+    setInterval(drawMatrix, 50);
+
+    window.addEventListener('resize', () => {
+      matrixCanvas.width = window.innerWidth;
+      matrixCanvas.height = window.innerHeight;
     });
   </script>
 </body>
