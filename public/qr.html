@@ -1,63 +1,54 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>WhatsApp QR — Baileys Web</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp QR Pair</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <style>
-    body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; display:flex; align-items:center; justify-content:center; min-height:100vh; background:#0f172a; color:#e6eef8; }
-    .card { background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015)); padding:28px; border-radius:12px; box-shadow: 0 8px 30px rgba(2,6,23,0.6); width:420px; text-align:center }
-    #qrcode { margin: 14px auto; width:260px; height:260px; display:grid; place-items:center; background:#ffffff; padding:8px; border-radius:8px }
-    #status { margin-top:8px; font-size:0.95rem; opacity:0.9 }
-    button { margin-top:12px; padding:8px 14px; border-radius:8px; border:none; cursor:pointer }
+    body {
+      font-family: Arial, sans-serif;
+      background: #0a0a0a;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    #qr {
+      margin-top: 20px;
+      padding: 20px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 16px;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>WhatsApp QR (Baileys)</h2>
-    <div id="qrcode">Waiting for QR…</div>
-    <div id="status">Status: <span id="s">init</span></div>
-    <div>
-      <button id="clear">Clear QR</button>
-    </div>
-    <p style="font-size:0.85rem; opacity:0.8; margin-top:10px">Scan from WhatsApp → Linked Devices → Link a device</p>
-  </div>
+  <h1>📱 Scan to Connect WhatsApp</h1>
+  <div id="qr"></div>
+  <p id="status"></p>
 
-  <!-- socket.io client -->
-  <script src="https://cdn.socket.io/4.7.1/socket.io.min.js"></script>
-  <!-- QR generator (davidshimjs qrcode) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
-    const socket = io();
-    let qrEl = document.getElementById('qrcode');
-    let statusEl = document.getElementById('s');
-    let qrDom = null;
+    const ws = new WebSocket(`ws://${location.host}`);
 
-    function renderQr(qr) {
-      qrEl.innerHTML = '';
-      if (!qr) {
-        qrEl.textContent = 'No QR (connected)';
-        return;
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      const qrDiv = document.getElementById("qr");
+      const status = document.getElementById("status");
+
+      if (data.type === "qr") {
+        qrDiv.innerHTML = "";
+        QRCode.toCanvas(document.createElement("canvas"), data.qr, { width: 256 }, (err, canvas) => {
+          if (!err) qrDiv.appendChild(canvas);
+        });
       }
-      qrDom = new QRCode(qrEl, {
-        text: qr,
-        width: 240,
-        height: 240,
-        correctLevel: QRCode.CorrectLevel.H
-n      });
-    }
 
-    socket.on('connect', () => console.log('socket connected'));
-    socket.on('qr', (qr) => {
-      renderQr(qr);
-    });
-    socket.on('status', (s) => {
-      statusEl.textContent = s || 'unknown';
-    });
-
-    document.getElementById('clear').addEventListener('click', () => {
-      qrEl.innerHTML = 'Cleared by user';
-    });
+      if (data.type === "status") {
+        status.textContent = "✅ Connected to WhatsApp!";
+      }
+    };
   </script>
 </body>
 </html>
