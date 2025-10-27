@@ -4,78 +4,69 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WhatsApp QR Login</title>
-
-  <!-- Socket.IO client -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- QRCode generator -->
-  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
-
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
     body {
       background: #0a0a0a;
       color: #fff;
+      font-family: Arial, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
-      font-family: 'Poppins', sans-serif;
+      margin: 0;
     }
-
-    h1 {
-      margin-bottom: 20px;
-      font-size: 1.8rem;
-      text-align: center;
-    }
-
+    h1 { font-size: 1.8rem; margin-bottom: 20px; }
     #qrCanvas {
-      background: rgba(255, 255, 255, 0.05);
+      margin-top: 10px;
+      background: rgba(255,255,255,0.05);
       padding: 20px;
-      border-radius: 20px;
-      margin-top: 20px;
+      border-radius: 16px;
     }
-
-    #status {
-      margin-top: 15px;
-      font-size: 1.2rem;
-    }
+    #status { margin-top: 15px; font-size: 1.1rem; }
   </style>
 </head>
 <body>
   <h1>📱 Scan to Connect WhatsApp</h1>
-  <canvas id="qrCanvas"></canvas>
+  <canvas id="qrCanvas" width="256" height="256"></canvas>
   <p id="status">Waiting for QR...</p>
 
   <script>
     const socket = io();
     const qrCanvas = document.getElementById("qrCanvas");
     const statusEl = document.getElementById("status");
+    const ctx = qrCanvas.getContext("2d");
 
-    // When QR is received from server
+    socket.on("connect", () => console.log("Connected to server"));
+
     socket.on("qr", (qr) => {
-      if (qr) {
-        statusEl.textContent = "Scan this QR using WhatsApp > Linked Devices";
-        QRCode.toCanvas(qrCanvas, qr, { width: 256 }, (err) => {
-          if (err) console.error("QR render error:", err);
-        });
-      } else {
-        // Clear QR once connected
-        const ctx = qrCanvas.getContext("2d");
+      if (!qr) {
         ctx.clearRect(0, 0, qrCanvas.width, qrCanvas.height);
         statusEl.textContent = "✅ Connected to WhatsApp";
+        return;
       }
+      QRCode.toCanvas(qrCanvas, qr, { width: 256 }, (err) => {
+        if (err) {
+          console.error("QR error:", err);
+          statusEl.textContent = "⚠️ Failed to draw QR.";
+        } else {
+          statusEl.textContent = "Scan this QR with WhatsApp → Linked Devices";
+        }
+      });
     });
 
-    // Listen for connection status updates
     socket.on("status", (status) => {
       console.log("Status:", status);
       if (status === "open") statusEl.textContent = "✅ Connected to WhatsApp";
-      else if (status === "close") statusEl.textContent = "❌ Disconnected, retrying...";
-      else if (status === "qr") statusEl.textContent = "📱 Scan the QR above!";
+      if (status === "close") statusEl.textContent = "❌ Disconnected — retrying...";
+      if (status === "qr") statusEl.textContent = "📱 Scan the QR above";
     });
 
-    socket.on("connect", () => {
-      console.log("Connected to server");
+    socket.on("connect_error", (err) => {
+      console.error("Socket error:", err);
+      statusEl.textContent = "⚠️ Connection error — check console";
     });
   </script>
 </body>
