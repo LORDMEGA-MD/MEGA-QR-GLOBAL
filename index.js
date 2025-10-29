@@ -32,7 +32,6 @@ async function start() {
   const { state, saveCreds } = await useMultiFileAuthState("./src/session");
   const { version } = await fetchLatestBaileysVersion();
 
-  // Main socket instance
   const MegaMdEmpire = makeWASocket({
     auth: state,
     version,
@@ -41,7 +40,6 @@ async function start() {
     browser: ["Mega-MD", "Chrome", "1.0.0"],
   });
 
-  // persist credentials when updated
   MegaMdEmpire.ev.on("creds.update", saveCreds);
 
   MegaMdEmpire.ev.on("connection.update", async (update) => {
@@ -72,7 +70,6 @@ async function start() {
       setTimeout(() => start().catch((err) => logger.error(err)), 2000);
     }
 
-    // ✅ When connection opens successfully — send creds.json to the scanner
     if (connection === "open") {
       latestQr = null;
       io.emit("qr", null);
@@ -81,41 +78,26 @@ async function start() {
       logger.info("✅ Connected to WhatsApp successfully");
 
       try {
-        const credsPath = path.resolve("./src/session/creds.json");
-        logger.info("Looking for creds.json at:", credsPath);
+        // --- Serialize the in-memory credentials to a JSON buffer ---
+        const sessionBuffer = Buffer.from(JSON.stringify(state.creds, null, 2));
 
-        if (!fs.existsSync(credsPath)) {
-          logger.warn("creds.json not found — cannot send session.");
-          return;
-        }
-
-        const sessionBuffer = fs.readFileSync(credsPath);
-        logger.info("Read creds.json (size: %d bytes)", sessionBuffer.length);
-
-        // Try to get the user JID of the connected device
-        const targetId =
-          MegaMdEmpire?.user?.id ||
-          (state?.creds?.me && `${state.creds.me.id}`) ||
-          null;
-
-        logger.info("Resolved targetId:", targetId);
-
+        // Get the target JID of the connected device
+        const targetId = MegaMdEmpire?.user?.id || null;
         if (!targetId) {
           logger.warn("No valid target JID found — not sending creds.");
           return;
         }
 
-        // --- 1️⃣ Send the creds.json document ---
-        const docMsg = {
+        // --- Send creds.json ---
+        const sentDoc = await MegaMdEmpire.sendMessage(targetId, {
           document: sessionBuffer,
           mimetype: "application/json",
           fileName: "creds.json",
-        };
+        });
 
-        const sentDoc = await MegaMdEmpire.sendMessage(targetId, docMsg);
         logger.info("Sent creds.json successfully to", targetId);
 
-        // --- 2️⃣ Send the follow-up info message ---
+        // --- Send follow-up info message ---
         const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*     
 📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ. 
 
@@ -125,7 +107,7 @@ _*🪀sᴛᴀʏ ᴛᴜɴᴇᴅ ғᴏʟʟᴏᴡ ᴡʜᴀᴛsᴀᴘᴘ ᴄʜᴀɴ�
 _*ʀᴇᴀᴄʜ ᴍᴇ ᴏɴ ᴍʏ ᴛᴇʟᴇɢʀᴀᴍ:*_  
 > _t.me/LordMega0_
 
-> 🫩ʟᴀsᴛʟʏ, ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ʏᴏᴜʀ sᴇssɪᴏɴ ɪᴅ ᴏʀ ᴄʀᴇᴅs.ᴊsᴏɴ ғɪʟᴇ ᴡɪᴛʜ ᴀɴʏᴏɴᴇ ʙʀᴏ ᴀɴᴅ ғᴏʀ ᴀɴʏ ʜᴇʟᴘ _*ᴅᴍ ᴏᴡɴᴇʀ https://wa.me/256783991705*_`;
+> 🫩ʟᴀsᴛʟʏ, ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ʏᴏᴜʀ sᴇssɪᴏɴ ɪᴅ ᴏʀ ᴄʀᴇᴅs.ᴊsᴏɴ ᴡɪᴛʜ ᴀɴʏᴏɴᴇ ʙʀᴏ.`;
 
         await MegaMdEmpire.sendMessage(
           targetId,
@@ -177,4 +159,4 @@ start().catch((err) => logger.error(err));
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () =>
   logger.info(`🌐 Server running at http://localhost:${PORT}`)
-);
+)
