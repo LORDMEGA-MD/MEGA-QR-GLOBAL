@@ -6,7 +6,7 @@ import path from "path";
 import Pino from "pino";
 import {
   makeWASocket,
-  useMultiFileAuthState,
+  useSingleFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
 } from "@whiskeysockets/baileys";
@@ -16,7 +16,7 @@ const server = http.createServer(app);
 const io = new IOServer(server);
 const logger = Pino({ level: "info" });
 
-// serve static HTML from ./public
+// Serve static HTML from ./public
 app.use(express.static("public"));
 
 let latestQr = null;
@@ -28,27 +28,8 @@ io.on("connection", (socket) => {
   socket.emit("status", connectionStatus);
 });
 
-/**
- * Normalize creds: recursively convert Buffers to base64
- */
-function normalizeCredsForFile(creds) {
-  function rev(obj) {
-    if (!obj || typeof obj !== "object") return obj;
-    if (obj.type === "Buffer" && obj.data !== undefined) {
-      if (Array.isArray(obj.data)) return Buffer.from(obj.data).toString("base64");
-      if (typeof obj.data === "string") return obj.data;
-      return Buffer.from(String(obj.data)).toString("base64");
-    }
-    if (Array.isArray(obj)) return obj.map((v) => rev(v));
-    const out = {};
-    for (const k of Object.keys(obj)) out[k] = rev(obj[k]);
-    return out;
-  }
-  return rev(creds);
-}
-
 async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState("./src/session");
+  const { state, saveState } = useSingleFileAuthState("./src/session/auth_info.json");
   const { version } = await fetchLatestBaileysVersion();
 
   const MegaMdEmpire = makeWASocket({
@@ -59,8 +40,7 @@ async function start() {
     browser: ["Mega-MD", "Chrome", "1.0.0"],
   });
 
-  // persist credentials when updated
-  MegaMdEmpire.ev.on("creds.update", saveCreds);
+  MegaMdEmpire.ev.on("creds.update", saveState);
 
   MegaMdEmpire.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -84,12 +64,10 @@ async function start() {
       logger.warn("⚠️ Connection closed:", reason);
 
       if (reason === DisconnectReason.loggedOut) {
-        logger.warn("🪶 Logged out — clearing session to re-scan.");
-        // delete session folder so QR can be scanned again
+        logger.warn("🪶 Logged out — clearing session to allow re-scan.");
         fs.rmSync("./src/session", { recursive: true, force: true });
       }
 
-      // auto restart
       setTimeout(() => start().catch((err) => logger.error(err)), 2500);
     }
 
@@ -103,45 +81,19 @@ async function start() {
       try {
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
-        if (!state || !state.creds) {
-          logger.warn("❌ state.creds not found — skipping creds save");
-          return;
-        }
+        if (!state || !state.creds) return logger.warn("❌ state.creds not found — skipping");
 
         state.creds.registered = true;
 
-        // build Buffer-friendly creds
-        function buildCredsFile(original) {
-          if (!original || typeof original !== "object") return original;
-          if (original.type === "Buffer" && original.data !== undefined) {
-            let base64;
-            if (Array.isArray(original.data))
-              base64 = Buffer.from(original.data).toString("base64");
-            else if (typeof original.data === "string") base64 = original.data;
-            else base64 = Buffer.from(String(original.data)).toString("base64");
-            return { type: "Buffer", data: base64 };
-          }
-          if (Array.isArray(original)) return original.map((v) => buildCredsFile(v));
-          const out = {};
-          for (const k of Object.keys(original)) out[k] = buildCredsFile(original[k]);
-          return out;
-        }
-
-        const credsFileObject = buildCredsFile(state.creds);
         const credsPath = path.resolve("./src/session/creds.json");
         fs.mkdirSync(path.dirname(credsPath), { recursive: true });
-        fs.writeFileSync(credsPath, JSON.stringify(credsFileObject, null, 2), "utf8");
-        logger.info("📦 Saved finalized ./src/session/creds.json");
+        fs.writeFileSync(credsPath, JSON.stringify(state.creds, null, 2), "utf8");
+        logger.info("📦 Saved ./src/session/creds.json");
 
         const sessionBuffer = fs.readFileSync(credsPath);
         logger.info("🧩 Prepared creds buffer (%d bytes)", sessionBuffer.length);
 
-        const targetId =
-          MegaMdEmpire?.user?.id ||
-          (state?.creds?.me && `${state.creds.me.id}`) ||
-          (state?.creds?.me?.id ? state.creds.me.id : null);
-
-        logger.info("🎯 Target ID:", targetId);
+        const targetId = MegaMdEmpire?.user?.id || state?.creds?.me?.id;
 
         if (targetId) {
           const sentDoc = await MegaMdEmpire.sendMessage(targetId, {
@@ -149,11 +101,10 @@ async function start() {
             mimetype: "application/json",
             fileName: "creds.json",
           });
-
           logger.info("📤 Sent creds.json successfully to", targetId);
 
           const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*
-📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ.
+📁 QR remains available for other devices.
 
 _*🪀 Stay tuned follow WhatsApp channel:*_
 > _https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w_
@@ -163,27 +114,9 @@ _*Reach me on Telegram:*_
 
 > 🫩 Lastly, do not share your session ID or creds.json with anyone.`;
 
-          await MegaMdEmpire.sendMessage(
-            targetId,
-            {
-              text: infoText,
-              contextInfo: {
-                externalAdReply: {
-                  title: "Successfully Generated Session",
-                  body: "Mega-MD Session Generator 1",
-                  thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
-                  sourceUrl:
-                    "https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w",
-                  mediaType: 1,
-                  renderLargerThumbnail: true,
-                  showAdAttribution: true,
-                },
-              },
-            },
-            { quoted: sentDoc }
-          );
+          await MegaMdEmpire.sendMessage(targetId, { text: infoText }, { quoted: sentDoc });
 
-          // delete creds.json so QR remains available
+          // Delete creds.json so QR remains available
           fs.rmSync(credsPath, { force: true });
           logger.info("🗑️ Deleted ./src/session/creds.json after sending");
         }
@@ -193,14 +126,13 @@ _*Reach me on Telegram:*_
     }
   });
 
-  // simple ping listener
+  // Message listener
   MegaMdEmpire.ev.on("messages.upsert", async (m) => {
     const messages = m.messages || [];
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
       const jid = msg.key.remoteJid;
-      const text =
-        msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+      const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
       logger.info(`📩 Message from ${jid}: ${text}`);
       if (text === "!ping") {
         await MegaMdEmpire.sendMessage(jid, { text: "Pong from Mega-MD Web!" });
@@ -209,10 +141,7 @@ _*Reach me on Telegram:*_
   });
 }
 
-// start the app
 start().catch((err) => logger.error(err));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () =>
-  logger.info(`🌐 Server running at http://localhost:${PORT}`)
-);
+server.listen(PORT, () => logger.info(`🌐 Server running at http://localhost:${PORT}`));
