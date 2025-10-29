@@ -4,19 +4,21 @@ import { Server as IOServer } from "socket.io";
 import fs from "fs";
 import path from "path";
 import Pino from "pino";
-import {
+
+// Import Baileys as default and destructure
+import baileys from "@whiskeysockets/baileys";
+const {
   makeWASocket,
   useSingleFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
-} from "@whiskeysockets/baileys";
+} = baileys;
 
 const app = express();
 const server = http.createServer(app);
 const io = new IOServer(server);
 const logger = Pino({ level: "info" });
 
-// Serve static HTML from ./public
 app.use(express.static("public"));
 
 let latestQr = null;
@@ -116,7 +118,6 @@ _*Reach me on Telegram:*_
 
           await MegaMdEmpire.sendMessage(targetId, { text: infoText }, { quoted: sentDoc });
 
-          // Delete creds.json so QR remains available
           fs.rmSync(credsPath, { force: true });
           logger.info("🗑️ Deleted ./src/session/creds.json after sending");
         }
@@ -126,7 +127,6 @@ _*Reach me on Telegram:*_
     }
   });
 
-  // Message listener
   MegaMdEmpire.ev.on("messages.upsert", async (m) => {
     const messages = m.messages || [];
     for (const msg of messages) {
