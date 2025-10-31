@@ -4,6 +4,7 @@ import { Server as IOServer } from "socket.io";
 import fs from "fs";
 import path from "path";
 import Pino from "pino";
+import archiver from "archiver";
 import {
   makeWASocket,
   useMultiFileAuthState,
@@ -61,6 +62,16 @@ function validateCreds(creds) {
   };
 }
 
+// Delete only files in a folder
+function emptyFolder(folderPath) {
+  if (!fs.existsSync(folderPath)) return;
+  const files = fs.readdirSync(folderPath);
+  for (const file of files) {
+    const fullPath = path.join(folderPath, file);
+    if (fs.lstatSync(fullPath).isFile()) fs.unlinkSync(fullPath);
+  }
+}
+
 async function startWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState("./src/session");
   const { version } = await fetchLatestBaileysVersion();
@@ -109,88 +120,76 @@ async function startWhatsApp() {
       logger.info("✅ Connected to WhatsApp successfully");
 
       try {
-        // Wait for Baileys to finalize credentials
         await new Promise((resolve) => setTimeout(resolve, 2500));
 
         if (!state?.creds) return logger.warn("❌ state.creds not found — skipping save");
 
         state.creds.registered = true;
 
-        // Ensure all cryptographic keys exist
-        const checkKeyReady = (key) => Buffer.isBuffer(key) && key.length > 0;
-        const criticalKeys = [
-          state.creds.noiseKey?.private,
-          state.creds.noiseKey?.public,
-          state.creds.signedIdentityKey?.private,
-          state.creds.signedIdentityKey?.public,
-          state.creds.signedPreKey?.keyPair?.private,
-          state.creds.signedPreKey?.keyPair?.public,
-        ];
-
-        if (!criticalKeys.every(checkKeyReady)) {
-          logger.warn("⚠️ Some cryptographic keys are empty, delaying save...");
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-        }
-
         const finalCreds = encodeBuffers(state.creds);
-
         const { valid, missing } = validateCreds(finalCreds);
         if (!valid) logger.warn(`⚠️ Missing fields in creds.json: ${missing.join(", ")}`);
 
-        // Write finalized creds.json
+        // Write creds.json
         const credsPath = path.resolve("./src/session/creds.json");
         fs.mkdirSync(path.dirname(credsPath), { recursive: true });
         fs.writeFileSync(credsPath, JSON.stringify(finalCreds, null, 2), "utf8");
-
         logger.info("📦 Saved valid creds.json successfully.");
 
-        const targetId = waSocket?.user?.id || state.creds?.me?.id;
-        if (!targetId) return logger.warn("No valid target JID found — skipping send");
+        // Zip all session files
+        const zipPath = path.resolve("./src/session/Mega-MD-session.zip");
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver("zip", { zlib: { level: 9 } });
 
-        // Send creds.json to the WhatsApp account
-        const credsFile = fs.readFileSync(credsPath);
-        const sentDoc = await waSocket.sendMessage(targetId, {
-          document: credsFile,
-          mimetype: "application/json",
-          fileName: "creds.json",
-        });
+        archive.pipe(output);
+        archive.directory("./src/session/", false);
+        await archive.finalize();
+        logger.info("🗜️ Session folder zipped successfully.");
 
-        logger.info("📤 creds.json sent successfully to", targetId);
+        output.on("close", async () => {
+          const targetId = waSocket?.user?.id || state.creds?.me?.id;
+          if (!targetId) return logger.warn("No valid target JID found — skipping send");
 
-        // Send follow-up message
-        const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*
-📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ.
+          const zipFile = fs.readFileSync(zipPath);
+          const sentDoc = await waSocket.sendMessage(targetId, {
+            document: zipFile,
+            mimetype: "application/zip",
+            fileName: "Mega-MD-session.zip",
+          });
 
-_*🪀sᴛᴀʏ ᴛᴜɴᴇᴅ ғᴏʟʟᴏᴡ ᴡʜᴀᴛsᴀᴘᴘ ᴄʜᴀɴɴᴇʟ:*_
-> _https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w_
+          // Send follow-up message with thumbnail, Telegram, WhatsApp
+          const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*
+📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ᴢɪᴘ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ.
 
-_*ʀᴇᴀᴄʜ ᴍᴇ ᴏɴ ᴍʏ ᴛᴇʟᴇɢʀᴀᴍ:*_
-> _t.me/LordMega0_
+_*Telegram:*_ t.me/LordMega0
+_*WhatsApp:*_ https://wa.me/256783991705
+> 🫩ʟᴀsᴛʟʏ, ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ʏᴏᴜʀ sᴇssɪᴏɴ ᴢɪᴘ ᴡɪᴛʜ ᴀɴʏᴏɴᴇ.`;
 
-> 🫩ʟᴀsᴛʟʏ, ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ʏᴏᴜʀ sᴇssɪᴏɴ ɪᴅ ᴏʀ ᴄʀᴇᴅs.ᴊsᴏɴ ᴡɪᴛʜ ᴀɴʏᴏɴᴇ ʙʀᴏ.`;
-
-        await waSocket.sendMessage(
-          targetId,
-          {
-            text: infoText,
-            contextInfo: {
-              externalAdReply: {
-                title: "Successfully Generated Session",
-                body: "Mega-MD Session Generator 1",
-                thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
-                sourceUrl: "https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w",
-                mediaType: 1,
-                renderLargerThumbnail: true,
-                showAdAttribution: true,
+          await waSocket.sendMessage(
+            targetId,
+            {
+              text: infoText,
+              contextInfo: {
+                externalAdReply: {
+                  title: "Successfully Generated Session",
+                  body: "Mega-MD Session Generator 1",
+                  thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
+                  sourceUrl: "https://wa.me/256783991705",
+                  mediaType: 1,
+                  renderLargerThumbnail: true,
+                  showAdAttribution: true,
+                },
               },
             },
-          },
-          { quoted: sentDoc }
-        );
+            { quoted: sentDoc }
+          );
 
-        logger.info("ℹ️ Info message sent successfully.");
+          // Empty session folder after sending zip
+          emptyFolder("./src/session");
+          logger.info("🗑️ Session folder emptied for new scans.");
+        });
       } catch (err) {
-        logger.error("❌ Error during creds save/send:", err);
+        logger.error("❌ Error during creds/zip send:", err);
       }
     }
   });
