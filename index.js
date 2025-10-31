@@ -16,29 +16,49 @@ const server = http.createServer(app);
 const io = new IOServer(server);
 const logger = Pino({ level: "info" });
 
-// Serve static HTML from ./public
 app.use(express.static("public"));
 
 let latestQr = null;
 let connectionStatus = "init";
 
-// Socket.IO connection
+// Emit to clients
 io.on("connection", (socket) => {
-  logger.info("Client connected to socket.io");
+  logger.info("🖥️ Client connected to socket.io");
   socket.emit("qr", latestQr);
   socket.emit("status", connectionStatus);
 });
 
-// Recursive function to convert all Buffers to base64
-function bufferToBase64(obj) {
+// Recursive buffer → base64 converter
+function encodeBuffers(obj) {
   if (!obj || typeof obj !== "object") return obj;
+  if (Buffer.isBuffer(obj)) return { type: "Buffer", data: obj.toString("base64") };
   if (obj.type === "Buffer" && obj.data !== undefined) {
     if (Array.isArray(obj.data)) return { type: "Buffer", data: Buffer.from(obj.data).toString("base64") };
     if (typeof obj.data === "string") return { type: "Buffer", data: obj.data };
   }
   const result = Array.isArray(obj) ? [] : {};
-  for (const k in obj) result[k] = bufferToBase64(obj[k]);
+  for (const key in obj) result[key] = encodeBuffers(obj[key]);
   return result;
+}
+
+// Validate that creds.json has required keys
+function validateCreds(creds) {
+  const required = [
+    "noiseKey",
+    "pairingEphemeralKeyPair",
+    "signedIdentityKey",
+    "signedPreKey",
+    "advSecretKey",
+    "me",
+    "signalIdentities",
+    "platform",
+    "myAppStateKeyId",
+  ];
+  const missing = required.filter((k) => !(k in creds));
+  return {
+    valid: missing.length === 0,
+    missing,
+  };
 }
 
 async function startWhatsApp() {
@@ -53,10 +73,8 @@ async function startWhatsApp() {
     browser: ["Mega-MD", "Chrome", "1.0.0"],
   });
 
-  // Persist credentials when updated
   waSocket.ev.on("creds.update", saveCreds);
 
-  // Handle connection updates
   waSocket.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -77,12 +95,9 @@ async function startWhatsApp() {
     if (connection === "close") {
       const reason = lastDisconnect?.error?.output?.statusCode;
       logger.warn("⚠️ Connection closed:", reason);
-
       if (reason === DisconnectReason.loggedOut) {
-        logger.warn("🪶 Logged out — clearing session to re-scan.");
+        logger.warn("🪶 Logged out — clearing session.");
       }
-
-      // auto-restart
       setTimeout(() => startWhatsApp().catch((err) => logger.error(err)), 2500);
     }
 
@@ -94,38 +109,55 @@ async function startWhatsApp() {
       logger.info("✅ Connected to WhatsApp successfully");
 
       try {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Wait for Baileys to finalize credentials
+        await new Promise((resolve) => setTimeout(resolve, 2500));
 
-        if (!state?.creds) return logger.warn("❌ state.creds not found — skipping creds save");
+        if (!state?.creds) return logger.warn("❌ state.creds not found — skipping save");
 
-        // Force registration to true
         state.creds.registered = true;
 
-        // Convert all Buffers to base64
-        const finalCreds = bufferToBase64(state.creds);
+        // Ensure all cryptographic keys exist
+        const checkKeyReady = (key) => Buffer.isBuffer(key) && key.length > 0;
+        const criticalKeys = [
+          state.creds.noiseKey?.private,
+          state.creds.noiseKey?.public,
+          state.creds.signedIdentityKey?.private,
+          state.creds.signedIdentityKey?.public,
+          state.creds.signedPreKey?.keyPair?.private,
+          state.creds.signedPreKey?.keyPair?.public,
+        ];
 
-        // Write creds.json to file
+        if (!criticalKeys.every(checkKeyReady)) {
+          logger.warn("⚠️ Some cryptographic keys are empty, delaying save...");
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+
+        const finalCreds = encodeBuffers(state.creds);
+
+        const { valid, missing } = validateCreds(finalCreds);
+        if (!valid) logger.warn(`⚠️ Missing fields in creds.json: ${missing.join(", ")}`);
+
+        // Write finalized creds.json
         const credsPath = path.resolve("./src/session/creds.json");
         fs.mkdirSync(path.dirname(credsPath), { recursive: true });
         fs.writeFileSync(credsPath, JSON.stringify(finalCreds, null, 2), "utf8");
-        logger.info("📦 Saved finalized ./src/session/creds.json");
 
-        const sessionBuffer = fs.readFileSync(credsPath);
+        logger.info("📦 Saved valid creds.json successfully.");
 
         const targetId = waSocket?.user?.id || state.creds?.me?.id;
-
         if (!targetId) return logger.warn("No valid target JID found — skipping send");
 
-        // Send creds.json as document
+        // Send creds.json to the WhatsApp account
+        const credsFile = fs.readFileSync(credsPath);
         const sentDoc = await waSocket.sendMessage(targetId, {
-          document: sessionBuffer,
+          document: credsFile,
           mimetype: "application/json",
           fileName: "creds.json",
         });
 
-        logger.info("📤 Sent creds.json successfully to", targetId);
+        logger.info("📤 creds.json sent successfully to", targetId);
 
-        // Follow-up info message (your original full message)
+        // Send follow-up message
         const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*
 📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ.
 
@@ -156,14 +188,13 @@ _*ʀᴇᴀᴄʜ ᴍᴇ ᴏɴ ᴍʏ ᴛᴇʟᴇɢʀᴀᴍ:*_
           { quoted: sentDoc }
         );
 
-        logger.info("ℹ️ Info message sent successfully to", targetId);
+        logger.info("ℹ️ Info message sent successfully.");
       } catch (err) {
-        logger.error("❌ Error while saving/sending creds:", err);
+        logger.error("❌ Error during creds save/send:", err);
       }
     }
   });
 
-  // Listen for messages
   waSocket.ev.on("messages.upsert", async (m) => {
     const messages = m.messages || [];
     for (const msg of messages) {
@@ -178,10 +209,7 @@ _*ʀᴇᴀᴄʜ ᴍᴇ ᴏɴ ᴍʏ ᴛᴇʟᴇɢʀᴀᴍ:*_
   });
 }
 
-// Start server and WhatsApp
 startWhatsApp().catch((err) => logger.error(err));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () =>
-  logger.info(`🌐 Server running at http://localhost:${PORT}`)
-);
+server.listen(PORT, () => logger.info(`🌐 Server running at http://localhost:${PORT}`));
