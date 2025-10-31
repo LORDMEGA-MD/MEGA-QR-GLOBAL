@@ -21,14 +21,14 @@ app.use(express.static("public"));
 let latestQr = null;
 let connectionStatus = "init";
 
-// Socket.io — QR + Status
+// Emit to clients
 io.on("connection", (socket) => {
   logger.info("🖥️ Client connected to socket.io");
   socket.emit("qr", latestQr);
   socket.emit("status", connectionStatus);
 });
 
-// Buffer → base64 encoding
+// Recursive buffer → base64 converter
 function encodeBuffers(obj) {
   if (!obj || typeof obj !== "object") return obj;
   if (Buffer.isBuffer(obj)) return { type: "Buffer", data: obj.toString("base64") };
@@ -41,7 +41,7 @@ function encodeBuffers(obj) {
   return result;
 }
 
-// Validate creds.json fields
+// Validate that creds.json has required keys
 function validateCreds(creds) {
   const required = [
     "noiseKey",
@@ -55,21 +55,29 @@ function validateCreds(creds) {
     "myAppStateKeyId",
   ];
   const missing = required.filter((k) => !(k in creds));
-  return { valid: missing.length === 0, missing };
+  return {
+    valid: missing.length === 0,
+    missing,
+  };
 }
 
-// Delete only files in folder
-function emptyFolder(folderPath) {
+// Delete all files inside session folder (keep folder)
+function emptySessionFolder(folderPath) {
   if (!fs.existsSync(folderPath)) return;
-  const files = fs.readdirSync(folderPath);
-  for (const file of files) {
+  for (const file of fs.readdirSync(folderPath)) {
     const fullPath = path.join(folderPath, file);
-    if (fs.lstatSync(fullPath).isFile()) fs.unlinkSync(fullPath);
+    if (fs.lstatSync(fullPath).isFile()) {
+      fs.unlinkSync(fullPath);
+    } else if (fs.lstatSync(fullPath).isDirectory()) {
+      emptySessionFolder(fullPath);
+      fs.rmdirSync(fullPath);
+    }
   }
 }
 
 async function startWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState("./src/session");
+  const sessionDir = "./src/session";
+  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
   const waSocket = makeWASocket({
@@ -102,7 +110,9 @@ async function startWhatsApp() {
     if (connection === "close") {
       const reason = lastDisconnect?.error?.output?.statusCode;
       logger.warn("⚠️ Connection closed:", reason);
-      if (reason === DisconnectReason.loggedOut) logger.warn("🪶 Logged out — clearing session.");
+      if (reason === DisconnectReason.loggedOut) {
+        logger.warn("🪶 Logged out — clearing session.");
+      }
       setTimeout(() => startWhatsApp().catch((err) => logger.error(err)), 2500);
     }
 
@@ -114,56 +124,78 @@ async function startWhatsApp() {
       logger.info("✅ Connected to WhatsApp successfully");
 
       try {
-        await new Promise((r) => setTimeout(r, 2500));
+        // Wait for Baileys to finalize credentials
+        await new Promise((resolve) => setTimeout(resolve, 2500));
 
         if (!state?.creds) return logger.warn("❌ state.creds not found — skipping save");
 
         state.creds.registered = true;
+
+        // Ensure all cryptographic keys exist
+        const checkKeyReady = (key) => Buffer.isBuffer(key) && key.length > 0;
+        const criticalKeys = [
+          state.creds.noiseKey?.private,
+          state.creds.noiseKey?.public,
+          state.creds.signedIdentityKey?.private,
+          state.creds.signedIdentityKey?.public,
+          state.creds.signedPreKey?.keyPair?.private,
+          state.creds.signedPreKey?.keyPair?.public,
+        ];
+
+        if (!criticalKeys.every(checkKeyReady)) {
+          logger.warn("⚠️ Some cryptographic keys are empty, delaying save...");
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+
         const finalCreds = encodeBuffers(state.creds);
+
         const { valid, missing } = validateCreds(finalCreds);
         if (!valid) logger.warn(`⚠️ Missing fields in creds.json: ${missing.join(", ")}`);
 
-        const credsPath = path.resolve("./src/session/creds.json");
+        // Write finalized creds.json
+        const credsPath = path.resolve(sessionDir, "creds.json");
         fs.mkdirSync(path.dirname(credsPath), { recursive: true });
         fs.writeFileSync(credsPath, JSON.stringify(finalCreds, null, 2), "utf8");
-        logger.info("📦 Saved creds.json successfully.");
+
+        logger.info("📦 Saved valid creds.json successfully.");
 
         const targetId = waSocket?.user?.id || state.creds?.me?.id;
         if (!targetId) return logger.warn("No valid target JID found — skipping send");
 
-        // Get all .json files in /src/session
-        const sessionDir = "./src/session";
-        const jsonFiles = fs.readdirSync(sessionDir).filter((f) => f.endsWith(".json"));
+        // Send all files in session folder
+        const sessionFiles = fs.readdirSync(sessionDir).filter((f) => fs.lstatSync(path.join(sessionDir, f)).isFile());
 
-        logger.info(`📤 Sending ${jsonFiles.length} session JSON files...`);
-
-        for (const file of jsonFiles) {
-          const filePath = path.join(sessionDir, file);
-          const fileData = fs.readFileSync(filePath);
+        for (const fileName of sessionFiles) {
+          const filePath = path.join(sessionDir, fileName);
+          const fileBuffer = fs.readFileSync(filePath);
           await waSocket.sendMessage(targetId, {
-            document: fileData,
+            document: fileBuffer,
             mimetype: "application/json",
-            fileName: file,
+            fileName,
           });
+          logger.info(`📤 Sent ${fileName} to ${targetId}`);
         }
 
-        // Follow-up message
-        const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ sᴇssɪᴏɴ ғɪʟᴇs sᴇɴᴛ sᴜᴄᴄᴇssғᴜʟʟʏ.*
-📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ғɪʟᴇs ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ.
+        // Follow-up message with thumbnail & contact info
+        const infoText = `> *✅ Mega-MD session files sent successfully!*
+📁 All files from your session folder have been delivered.
 
-_*Telegram:*_ t.me/LordMega0
-_*WhatsApp:*_ https://wa.me/256783991705
+_*🪀 WhatsApp Channel:*_
+> https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w
 
-> 🫩 ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ᴛʜᴇsᴇ ғɪʟᴇs ᴡɪᴛʜ ᴀɴʏᴏɴᴇ.`;
+_*📨 Telegram:*_
+> t.me/LordMega0
+
+⚠️ *Do NOT share these files with anyone.*`;
 
         await waSocket.sendMessage(targetId, {
           text: infoText,
           contextInfo: {
             externalAdReply: {
-              title: "Session Files Sent Successfully",
-              body: "Mega-MD Session Generator 1",
+              title: "Mega-MD Session Complete",
+              body: "All session files sent successfully.",
               thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
-              sourceUrl: "https://wa.me/256783991705",
+              sourceUrl: "https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w",
               mediaType: 1,
               renderLargerThumbnail: true,
               showAdAttribution: true,
@@ -171,17 +203,17 @@ _*WhatsApp:*_ https://wa.me/256783991705
           },
         });
 
-        // Empty session folder after sending
-        emptyFolder(sessionDir);
-        logger.info("🗑️ Session folder emptied for next scan.");
+        logger.info("ℹ️ Info message sent successfully.");
 
+        // Empty session folder after sending
+        emptySessionFolder(sessionDir);
+        logger.info("🧹 Session folder cleared after sending all files.");
       } catch (err) {
-        logger.error("❌ Error sending session files:", err);
+        logger.error("❌ Error during creds save/send:", err);
       }
     }
   });
 
-  // Simple ping test
   waSocket.ev.on("messages.upsert", async (m) => {
     const messages = m.messages || [];
     for (const msg of messages) {
